@@ -1,0 +1,124 @@
+# CI for the CS4472 ATM project (behaviour specified in TESTING.md).
+#
+#  - lint:  Checkstyle on Java 11. Always blocks merging.
+#  - tests: reads the PR's labels and requires exactly one of
+#           phase:tests / phase:fix.
+#             phase:tests -> suite runs, test failures tolerated
+#             phase:fix   -> suite must be fully green
+#             push to dev -> suite runs, failures tolerated (informational)
+#           JUnit results and JaCoCo coverage are then published to the PR
+#           (informational, never blocking).
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (Checkstyle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: maven
+
+      - name: Run Checkstyle
+        run: mvn -B checkstyle:check
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine phase from PR labels
+        id: phase
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Push to dev: running the suite in informational mode."
+            echo "mode=informational" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          has_tests=$(echo "$LABELS_JSON" | jq 'index("phase:tests") != null')
+          has_fix=$(echo "$LABELS_JSON" | jq 'index("phase:fix") != null')
+          echo "PR labels: $LABELS_JSON"
+
+          if [ "$has_tests" = "true" ] && [ "$has_fix" = "false" ]; then
+            echo "mode=tests" >> "$GITHUB_OUTPUT"
+          elif [ "$has_fix" = "true" ] && [ "$has_tests" = "false" ]; then
+            echo "mode=fix" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::A pull request into main must carry exactly one of the labels 'phase:tests' or 'phase:fix'."
+            exit 1
+          fi
+
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: maven
+
+      - name: Run test suite (failures tolerated)
+        if: steps.phase.outputs.mode == 'tests' || steps.phase.outputs.mode == 'informational'
+        run: mvn -B -Dmaven.test.failure.ignore=true test
+
+      - name: Run test suite (must pass)
+        if: steps.phase.outputs.mode == 'fix'
+        run: mvn -B test
+
+      - name: Publish JUnit results
+        if: always() && steps.phase.outcome == 'success'
+        continue-on-error: true
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: target/surefire-reports/TEST-*.xml
+          check_name: JUnit test report
+          comment_mode: ${{ github.event_name == 'pull_request' && 'always' || 'off' }}
+          action_fail: false
+
+      - name: Post JaCoCo coverage comment
+        if: always() && github.event_name == 'pull_request' && steps.phase.outcome == 'success'
+        continue-on-error: true
+        uses: madrapps/jacoco-report@v1.7.1
+        with:
+          paths: ${{ github.workspace }}/target/site/jacoco/jacoco.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: JaCoCo coverage
+          update-comment: true
+
+      - name: Upload reports
+        if: always() && steps.phase.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          if-no-files-found: ignore
