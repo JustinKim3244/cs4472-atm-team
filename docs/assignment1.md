@@ -38,11 +38,14 @@ the corresponding parameterized test, so a row here maps one-to-one to a test in
 
 ### 1.2 `atm.session.Session` — Robust Worst Case BVA (PIN format and withdrawal amount)
 
-**Set-up.** As required, the account has a **daily limit of $1,000** and an **available balance of $5,000**. The bank
-is replaced by a Mockito stub of `MessageDispatcher` that accepts the credentials and returns a successful withdrawal
-with the new balance ($5,000 − amount), so only the session's own validation is under test. The session is driven
-through the console `ATM` facade, which owns the `Session`: it validates the PIN (`ATM.checkPin`, which must throw
-`InvalidPinFormatException`) before handing it to `Session.addPin`, and passes the amount to `Session.setAmount`
+**Set-up.** The assignment asks for an account with a **daily limit of $1,000** and an **available balance of
+$5,000**. The bank is replaced by a Mockito stub of `MessageDispatcher` that accepts the credentials and returns a
+successful withdrawal with the new balance ($5,000 − amount), so only the session's own validation is under test.
+**The code has no daily-limit setting:** no class in `src/main` stores or checks a daily limit, and the session never
+asks the bank for one, so it could not be configured. The $1,000 limit is therefore applied from the specification
+as the expected upper boundary of the amount; the missing check is itself a fault (SF4, Section 4). The session is
+driven through the console `ATM` facade, which owns the `Session`: it validates the PIN (`ATM.checkPin`, which must
+throw `InvalidPinFormatException`) before handing it to `Session.addPin`, and passes the amount to `Session.setAmount`
 (which must throw `InvalidAmountException`). Each case selects transaction choice 1 (Withdrawal) from Chequing.
 
 **Input variables and their robust boundary values (7 each).**
@@ -50,28 +53,47 @@ through the console `ATM` facade, which owns the `Session`: it validates the PIN
 | Variable | Valid domain | min− | min | min+ | nom | max− | max | max+ |
 |---|---|---|---|---|---|---|---|---|
 | PIN | exactly 5 decimal digits, i.e. `00000`–`99999` | `0000` | `00000` | `00001` | `55555` | `99998` | `99999` | `100000` |
-| Amount | dispensable in $20/$50 bills, $20 – $1,000 | $0 | $20 | $40 | $500 | $980 | $1,000 | $1,020 |
+| Amount | dispensable in $20/$50 bills, $20 – $1,000 | $0 | $20 | $40 | $500 | $990 | $1,000 | $1,010 |
 
 * **PIN.** A 5-digit PIN is treated as a number in 00000–99999 written with exactly five digits. The values just
   outside the domain are the nearest strings that break the format: `0000` (one digit short) and `100000` (one
   digit too many). The valid boundary values also cover the digit-character boundaries `0` and `9`.
 * **Amount.** The smallest dispensable amount is $20 and the daily limit ($1,000) is the upper boundary, as the
-  assignment states. The step between neighbouring values is $20, the smallest bill, so min+ = $40, max− = $980
-  (49 × $20), min− = $0 and max+ = $1,020. Both min− and max+ are themselves dispensable, so they test *only* the
-  range boundaries and not the bill rule.
+  assignment states. With $20 and $50 bills, $20 and every multiple of $10 from $40 upwards can be dispensed
+  ($30 cannot), so the dispensable values closest to each boundary are: min+ = $40, max− = $990
+  (19 × $50 + 2 × $20) and max+ = $1,010 (19 × $50 + 3 × $20). min− = $0 is the value below the smallest
+  amount. Both min− and max+ are themselves dispensable, so by the specification they test *only* the range
+  boundaries and not the bill rule.
 
 **Worst case.** Robust worst-case BVA takes the Cartesian product of the two 7-value sets: 7 × 7 = **49 cases**
 (`SE-01`–`SE-49`).
 
-**Single fault assumption.** Each case has exactly one expected outcome. The ATM asks for the PIN before the
-amount, so a case with an invalid PIN expects `InvalidPinFormatException` and the session never reaches the amount.
-A case with a valid PIN and an invalid amount expects `InvalidAmountException`, and a case with both valid is
-accepted. For valid-PIN cases the test checks the PIN step and the amount step separately (`assertAll`), so a fault
-in PIN handling cannot hide a fault in amount handling.
+**Worst case versus the single fault assumption.** The assignment asks for robust *worst case* BVA *under the single
+fault assumption*, but these two pull in different directions: worst-case BVA is by definition the
+*multiple*-fault variant (every combination of boundary values), while the single fault assumption on its own gives
+robust BVA with one variable off nominal at a time (6n + 1 = 13 cases for n = 2). We followed the explicit request
+for worst case and generated all 49 cases; they include the 13 single-fault cases (every case where the PIN or the
+amount is at its nominal value). We applied the single fault assumption to how each case is *checked*, so that each
+check sees one fault at a time:
+
+* The ATM asks for the PIN before the amount, so a case with an invalid PIN expects `InvalidPinFormatException`, and
+  the session never reaches the amount.
+* For a valid-PIN case, the PIN step and the amount step are checked separately (`assertAll`) in two sessions. The
+  PIN step uses the real `FormatChecker`. The amount step uses a session whose PIN check is stubbed to accept, so the
+  session really is at the amount step (Withdrawal from Chequing) when the amount is entered, whatever the PIN code
+  does. A fault in PIN handling therefore cannot hide, or change the state of, the amount check.
+* A case with a valid PIN and an invalid amount expects `InvalidAmountException`, and a case with both valid is
+  accepted.
+
+Whether the course intends this reading or plain single-fault robust BVA is worth confirming with the TA; the 13
+single-fault cases are a subset of the 49, so the results for either reading can be read off Section 3.1.
 
 **Supplementary cases.** BVA only exercises the range boundaries; it says nothing about the second part of the
 amount rule ("can be dispensed in $20 and $50 bills"). Six extra cases (`SE-X1`–`SE-X6`) use a nominal valid PIN and
-amounts that need different bill combinations. They are reported separately and are not part of the BVA count.
+amounts that need different bill combinations. A seventh, `SE-X7` ($1,020), tests the daily limit on its own: the
+BVA max+ value $1,010 is wrongly rejected by the code's bill check (SF2), which would hide a missing limit check,
+while $1,020 passes that bill check. The supplementary cases are reported separately and are not part of the BVA
+count.
 
 ### 1.3 `FeesCalculator.calculateWithdrawalFee` — Robust Worst Case BVA
 
@@ -158,53 +180,53 @@ example, student, amount < $200, source < $2,000, destination ≥ $1,000 → 0.0
 | SE-02 | `0000` | min- (4 digits) | $20 | min | InvalidPinFormatException |
 | SE-03 | `0000` | min- (4 digits) | $40 | min+ | InvalidPinFormatException |
 | SE-04 | `0000` | min- (4 digits) | $500 | nom | InvalidPinFormatException |
-| SE-05 | `0000` | min- (4 digits) | $980 | max- | InvalidPinFormatException |
+| SE-05 | `0000` | min- (4 digits) | $990 | max- | InvalidPinFormatException |
 | SE-06 | `0000` | min- (4 digits) | $1000 | max | InvalidPinFormatException |
-| SE-07 | `0000` | min- (4 digits) | $1020 | max+ | InvalidPinFormatException |
+| SE-07 | `0000` | min- (4 digits) | $1010 | max+ | InvalidPinFormatException |
 | SE-08 | `00000` | min | $0 | min- | InvalidAmountException |
 | SE-09 | `00000` | min | $20 | min | accepted |
 | SE-10 | `00000` | min | $40 | min+ | accepted |
 | SE-11 | `00000` | min | $500 | nom | accepted |
-| SE-12 | `00000` | min | $980 | max- | accepted |
+| SE-12 | `00000` | min | $990 | max- | accepted |
 | SE-13 | `00000` | min | $1000 | max | accepted |
-| SE-14 | `00000` | min | $1020 | max+ | InvalidAmountException |
+| SE-14 | `00000` | min | $1010 | max+ | InvalidAmountException |
 | SE-15 | `00001` | min+ | $0 | min- | InvalidAmountException |
 | SE-16 | `00001` | min+ | $20 | min | accepted |
 | SE-17 | `00001` | min+ | $40 | min+ | accepted |
 | SE-18 | `00001` | min+ | $500 | nom | accepted |
-| SE-19 | `00001` | min+ | $980 | max- | accepted |
+| SE-19 | `00001` | min+ | $990 | max- | accepted |
 | SE-20 | `00001` | min+ | $1000 | max | accepted |
-| SE-21 | `00001` | min+ | $1020 | max+ | InvalidAmountException |
+| SE-21 | `00001` | min+ | $1010 | max+ | InvalidAmountException |
 | SE-22 | `55555` | nom | $0 | min- | InvalidAmountException |
 | SE-23 | `55555` | nom | $20 | min | accepted |
 | SE-24 | `55555` | nom | $40 | min+ | accepted |
 | SE-25 | `55555` | nom | $500 | nom | accepted |
-| SE-26 | `55555` | nom | $980 | max- | accepted |
+| SE-26 | `55555` | nom | $990 | max- | accepted |
 | SE-27 | `55555` | nom | $1000 | max | accepted |
-| SE-28 | `55555` | nom | $1020 | max+ | InvalidAmountException |
+| SE-28 | `55555` | nom | $1010 | max+ | InvalidAmountException |
 | SE-29 | `99998` | max- | $0 | min- | InvalidAmountException |
 | SE-30 | `99998` | max- | $20 | min | accepted |
 | SE-31 | `99998` | max- | $40 | min+ | accepted |
 | SE-32 | `99998` | max- | $500 | nom | accepted |
-| SE-33 | `99998` | max- | $980 | max- | accepted |
+| SE-33 | `99998` | max- | $990 | max- | accepted |
 | SE-34 | `99998` | max- | $1000 | max | accepted |
-| SE-35 | `99998` | max- | $1020 | max+ | InvalidAmountException |
+| SE-35 | `99998` | max- | $1010 | max+ | InvalidAmountException |
 | SE-36 | `99999` | max | $0 | min- | InvalidAmountException |
 | SE-37 | `99999` | max | $20 | min | accepted |
 | SE-38 | `99999` | max | $40 | min+ | accepted |
 | SE-39 | `99999` | max | $500 | nom | accepted |
-| SE-40 | `99999` | max | $980 | max- | accepted |
+| SE-40 | `99999` | max | $990 | max- | accepted |
 | SE-41 | `99999` | max | $1000 | max | accepted |
-| SE-42 | `99999` | max | $1020 | max+ | InvalidAmountException |
+| SE-42 | `99999` | max | $1010 | max+ | InvalidAmountException |
 | SE-43 | `100000` | max+ (6 digits) | $0 | min- | InvalidPinFormatException |
 | SE-44 | `100000` | max+ (6 digits) | $20 | min | InvalidPinFormatException |
 | SE-45 | `100000` | max+ (6 digits) | $40 | min+ | InvalidPinFormatException |
 | SE-46 | `100000` | max+ (6 digits) | $500 | nom | InvalidPinFormatException |
-| SE-47 | `100000` | max+ (6 digits) | $980 | max- | InvalidPinFormatException |
+| SE-47 | `100000` | max+ (6 digits) | $990 | max- | InvalidPinFormatException |
 | SE-48 | `100000` | max+ (6 digits) | $1000 | max | InvalidPinFormatException |
-| SE-49 | `100000` | max+ (6 digits) | $1020 | max+ | InvalidPinFormatException |
+| SE-49 | `100000` | max+ (6 digits) | $1010 | max+ | InvalidPinFormatException |
 
-**Supplementary dispensability cases** (nominal valid PIN; not part of the BVA count):
+**Supplementary cases** (nominal valid PIN; not part of the BVA count):
 
 | ID | PIN | Amount | Dispensable as | Expected outcome |
 |---|---|---|---|---|
@@ -214,6 +236,7 @@ example, student, amount < $200, source < $2,000, destination ≥ $1,000 → 0.0
 | SE-X4 | `55555` | $80 | 4 × $20 | accepted |
 | SE-X5 | `55555` | $110 | $50 + 3 × $20 | accepted |
 | SE-X6 | `55555` | $130 | $50 + 4 × $20 | accepted |
+| SE-X7 | `55555` | $1,020 | 20 × $50 + $20, but over the $1,000 daily limit | InvalidAmountException |
 
 ### 2.2 `FeesCalculatorWithdrawalTest` (Robust Worst Case BVA, 119 cases)
 
@@ -402,18 +425,22 @@ The results below are from running the suite with Java 11 (`mvn -B test`) and ma
 the pull request. A test **fails** when the code's output differs from the specification. As the assignment says,
 failing tests are the point: the code was not changed.
 
-| `atm.session.SessionTest` | Robust Worst Case BVA (+6 supplementary) | 55 | 7 | 48 |
+| Test class | Technique | Cases | Passed | Failed |
+|---|---|---|---|---|
+| `atm.session.SessionTest` | Robust Worst Case BVA (+7 supplementary) | 56 | 7 | 49 |
 | `bank.utils.FeesCalculatorWithdrawalTest` | Robust Worst Case BVA | 119 | 42 | 77 |
 | `bank.utils.FeesCalculatorDepositTest` | Weak Robust ECA | 10 | 2 | 8 |
 | `bank.utils.FeesCalculatorTransferTest` | Decision Table | 16 | 0 | 16 |
-| **Total** | | **200** | **51** | **149** |
+| **Total** | | **201** | **51** | **150** |
 
 The three starter tests that came with the repository (`ATMTest`, `FeesCalculatorTest`) are unchanged and not
 counted above.
 
 ### 3.1 `SessionTest`
 
-"PIN step" is what `ATM.checkPin` did; "Amount step" is what `Session.setAmount` did for a withdrawal.
+"PIN step" is what `ATM.checkPin` did with the real `FormatChecker`. "Amount step" is what `Session.setAmount` did for
+a withdrawal, in a session that had already passed the PIN step and selected Withdrawal from Chequing (Section 1.2).
+A valid-PIN case passes only if both steps match the expected outcome.
 
 | ID | Expected outcome | PIN step (actual) | Amount step (actual) | Result |
 |---|---|---|---|---|
@@ -428,37 +455,37 @@ counted above.
 | SE-09 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-10 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-11 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-12 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-12 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-13 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-14 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
+| SE-14 | InvalidAmountException | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-15 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
 | SE-16 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-17 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-18 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-19 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-19 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-20 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-21 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
+| SE-21 | InvalidAmountException | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-22 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
 | SE-23 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-24 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-25 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-26 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-26 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-27 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-28 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
+| SE-28 | InvalidAmountException | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-29 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
 | SE-30 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-31 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-32 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-33 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-33 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-34 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-35 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
+| SE-35 | InvalidAmountException | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-36 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
 | SE-37 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-38 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-39 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-40 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-40 | accepted | InvalidPinFormatException | accepted | **FAIL** |
 | SE-41 | accepted | InvalidPinFormatException | accepted | **FAIL** |
-| SE-42 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
+| SE-42 | InvalidAmountException | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-43 | InvalidPinFormatException | InvalidPinFormatException | — (not reached) | PASS |
 | SE-44 | InvalidPinFormatException | InvalidPinFormatException | — (not reached) | PASS |
 | SE-45 | InvalidPinFormatException | InvalidPinFormatException | — (not reached) | PASS |
@@ -472,6 +499,7 @@ counted above.
 | SE-X4 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-X5 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
 | SE-X6 | accepted | InvalidPinFormatException | InvalidAmountException | **FAIL** |
+| SE-X7 | InvalidAmountException | InvalidPinFormatException | accepted | **FAIL** |
 
 ### 3.2 `FeesCalculatorWithdrawalTest`
 
@@ -640,29 +668,35 @@ counted above.
 Each entry is one fault, with every failing test case that exposes it. The failing cases were traced into the code
 by following the path their inputs take and finding the first statement where the code departs from the spec. Some
 `SessionTest` cases appear under two faults: in a valid-PIN case both the PIN step and the amount step can fail
-independently (Section 1.2).
+independently (Section 1.2). Every fault is marked **Confirmed** (the failure follows directly from the
+specification's own wording) or **Assumption-based** (the failure depends on an assumption we stated in Section 1,
+where the specification is silent).
 
-| ID | Failing test cases | Suspected fault (file, method, line) | Justification |
-|---|---|---|---|
-| SF1 | SE-01–42, SE-X1, SE-X2, SE-X3, SE-X4, SE-X5, SE-X6 (48) | `src/main/java/atm/utils/FormatChecker.java` — `checkPinFormat`, line 33: `pin.length == 4` | Every 5-digit PIN is rejected with InvalidPinFormatException and the 4-digit PIN `0000` is accepted, because the length check is 4 instead of 5. (Line 35, `pin[i] >= '9'`, would also reject digit 9 — e.g. 99999 — but this is masked until the length is fixed.) |
-| SF2 | SE-12, SE-19, SE-26, SE-33, SE-40, SE-X2, SE-X4, SE-X5, SE-X6 (9) | `src/main/java/atm/utils/CashValidator.java` — `validateWithdrawal`, lines 23–27 (`% 50` then `% 20`) | Amounts that need more than a single $20 after the $50s (60, 80, 110, 130, 980 = 49×$20) are rejected with InvalidAmountException even though they can be dispensed in $20 and $50 bills. |
-| SF3 | SE-08, SE-15, SE-22, SE-29, SE-36 (5) | `src/main/java/atm/session/Session.java` — `setAmount`, lines 87–91 (withdrawal branch) | An amount of $0 is accepted because the only check is dispensability (0 % 50 == 0); there is no lower-bound check, so InvalidAmountException is never thrown. |
-| SF4 | SE-14, SE-21, SE-28, SE-35, SE-42 (5) | `src/main/java/atm/session/Session.java` — `setAmount`, lines 87–91 (withdrawal branch) | $1,020 is dispensable but exceeds the $1,000 daily limit; setAmount never compares the amount with the daily limit, so it is accepted instead of throwing InvalidAmountException. |
-| WF1 | WD-072–076, WD-079–083, WD-086–090, WD-093–097, WD-100–104, WD-107–111, WD-114–118 (35) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 12: student branch tests `dayOfWeek == SATURDAY || dayOfWeek == SUNDAY` for the free case | The weekday/weekend condition is inverted: students are charged 0.1% on weekdays (spec: free) and nothing on Saturday/Sunday (spec: 0.1%); days 0 and 8 pass only because neither branch treats them as weekend. |
-| WF2 | WD-001–004, WD-011–014, WD-021–024, WD-031–034, WD-041–044, WD-051–054, WD-061–064 (28) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 19: `feePercentage = 0.002` | Every non-student case with balance below $1,000 returns 0.2% of the amount instead of the specified 0.3%. |
-| WF3 | WD-009–010, WD-019–020, WD-029–030, WD-039–040, WD-049–050, WD-059–060, WD-069–070 (14) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 20: `accountBalance < 10000.00` | Balances of $5,000 and $5,000.01 are still charged 0.1%, so the no-fee boundary is at $10,000 instead of the specified $5,000. |
-| DF1 | DE-01, DE-04–05 (3) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 50: `interestPercentage = 0.002` | A student depositing ≤ $50 into an account with balance ≤ $5,000 should pay nothing, but is charged 0.2% (and with no guard on the amount, a −$100 deposit yields a negative fee of −0.2). |
-| DF2 | DE-02 (1) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 39: `amount > 100.00` | A $100 student deposit is "more than $50" per the spec but takes the small-deposit branch because the threshold is $100; the large-deposit rates on lines 42/44 (1%/0.5%) are also double the spec's 0.5%/0.25%. |
-| DF3 | DE-06, DE-08, DE-10 (3) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, lines 61–64: `> 10000.00 → 0.005`, else `0.0` | For a non-student deposit ≤ $250 the two rates are swapped/wrong: balance > $10,000 should be free (code charges 0.5%) and otherwise 0.1% (code charges nothing). |
-| DF4 | DE-07 (1) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 54: `amount > 500.00` | A $500 non-student deposit is "more than $250" but the code's threshold is $500, so it falls into the small-deposit branch and returns 0 instead of 0.8%. |
-| TF1 | TR-01–04 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, line 80: `amount < 100.00` (student branch) | A $150 student transfer is below the spec's $200 threshold but is routed to the ≥ $100 branch, which then applies a rate that is also not the spec's. |
-| TF2 | TR-05–06, TR-13–14 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, lines 81, 95 and 125: `fromAccountBalance < 1000.00` | A source balance of $1,500 is below the spec's $2,000 threshold but the code compares against $1,000, selecting the high-balance rate; the selected rates are also not the spec's. |
-| TF3 | TR-09–12 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, lines 111, 112 and 118: thresholds `1000.00` in the non-student `amount < 100` branch | For non-student transfers under $100 the spec uses from < $4,000 and to < $2,000, but the code uses $1,000 for both, so all four rules collapse onto the wrong rates (e.g. $3,000 / $1,500 should be 0.2%). |
-| TF4 | TR-07–08, TR-15–16 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, rate constants on lines 103, 105, 133 and 135 | These cases take the correct branch but still fail, so the constants themselves are wrong: lines 103, 105 and 133 are 10× the spec (e.g. 0.025 for 0.25%), and line 135 is 0.055 where the spec gives 0.25% (0.0025). |
+| ID | Failing test cases | Suspected fault (file, method, line) | Justification | Basis |
+|---|---|---|---|---|
+| SF1 | SE-01–42, SE-X1–X7 (49) | `src/main/java/atm/utils/FormatChecker.java` — `checkPinFormat`, line 33: `pin.length == 4` | Every 5-digit PIN is rejected with InvalidPinFormatException and the 4-digit PIN `0000` is accepted, because the length check is 4 instead of 5. (Line 35, `pin[i] >= '9'`, would also reject digit 9 — e.g. 99999 — but this is masked until the length is fixed.) | Confirmed |
+| SF2 | SE-X2, SE-X4, SE-X5, SE-X6 (4) | `src/main/java/atm/utils/CashValidator.java` — `validateWithdrawal`, lines 23–27 (`% 50` then `% 20`) | Amounts that need more than one $20 after the $50s ($60, $80, $110, $130) are rejected with InvalidAmountException even though they can be dispensed in $20 and $50 bills. The same check also rejects the BVA max+ value $1,010, so `SE-14`, `SE-21`, `SE-28`, `SE-35` and `SE-42` get the expected InvalidAmountException only by coincidence (see SF4). | Confirmed |
+| SF3 | SE-08, SE-15, SE-22, SE-29, SE-36 (5) | `src/main/java/atm/session/Session.java` — `setAmount`, lines 87–91 (withdrawal branch) | An amount of $0 is accepted because the only check is dispensability (0 % 50 == 0); there is no lower-bound check, so InvalidAmountException is never thrown. | Assumption-based: the specification never states that $0 is invalid; we assumed the smallest valid withdrawal is $20 (Section 1.2). |
+| SF4 | SE-X7 (1) | `src/main/java/atm/session/Session.java` — `setAmount`, lines 87–91 (withdrawal branch) | $1,020 passes the code's bill check but exceeds the $1,000 daily limit; setAmount never compares the amount with a daily limit (the code has none), so it is accepted instead of throwing InvalidAmountException. The BVA max+ cases ($1,010) do not show this fault because SF2 rejects $1,010 first. | Confirmed |
+| WF1 | WD-072–076, WD-079–083, WD-086–090, WD-093–097, WD-100–104, WD-107–111, WD-114–118 (35) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 12: student branch tests `dayOfWeek == SATURDAY \|\| dayOfWeek == SUNDAY` for the free case | The weekday/weekend condition is inverted: students are charged 0.1% on weekdays (spec: free) and nothing on Saturday/Sunday (spec: 0.1%); days 0 and 8 pass only because neither branch treats them as weekend. | Confirmed |
+| WF2 | WD-001–004, WD-011–014, WD-021–024, WD-031–034, WD-041–044, WD-051–054, WD-061–064 (28) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 19: `feePercentage = 0.002` | Every non-student case with balance below $1,000 returns 0.2% of the amount instead of the specified 0.3%. | Confirmed |
+| WF3 | WD-009–010, WD-019–020, WD-029–030, WD-039–040, WD-049–050, WD-059–060, WD-069–070 (14) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateWithdrawalFee`, line 20: `accountBalance < 10000.00` | Balances of $5,000 and $5,000.01 are still charged 0.1%, so the no-fee boundary is at $10,000 instead of the specified $5,000. | Confirmed |
+| DF1 | DE-01, DE-04–05 (3) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 50: `interestPercentage = 0.002` | A student depositing ≤ $50 into an account with balance ≤ $5,000 should pay nothing, but is charged 0.2% (and with no guard on the amount, a −$100 deposit yields a negative fee of −0.2). | Confirmed |
+| DF2 | DE-02 (1) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 39: `amount > 100.00` | A $100 student deposit is "more than $50" per the spec but takes the small-deposit branch because the threshold is $100; the large-deposit rates on lines 42/44 (1%/0.5%) are also double the spec's 0.5%/0.25%. | Confirmed |
+| DF3 | DE-06, DE-08, DE-10 (3) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, lines 61–64: `> 10000.00 → 0.005`, else `0.0` | For a non-student deposit ≤ $250 the two rates are swapped/wrong: balance > $10,000 should be free (code charges 0.5%) and otherwise 0.1% (code charges nothing). | Confirmed |
+| DF4 | DE-07 (1) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateDepositInterest`, line 54: `amount > 500.00` | A $500 non-student deposit is "more than $250" but the code's threshold is $500, so it falls into the small-deposit branch and returns 0 instead of 0.8%. | Confirmed |
+| TF1 | TR-01–04 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, line 80: `amount < 100.00` (student branch) | A $150 student transfer is below the spec's $200 threshold but is routed to the ≥ $100 branch, which then applies a rate that is also not the spec's. | Confirmed |
+| TF2 | TR-05–06, TR-13–14 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, lines 81, 95 and 125: `fromAccountBalance < 1000.00` | A source balance of $1,500 is below the spec's $2,000 threshold but the code compares against $1,000, selecting the high-balance rate; the selected rates are also not the spec's. | Confirmed |
+| TF3 | TR-09–12 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, lines 111, 112 and 118: thresholds `1000.00` in the non-student `amount < 100` branch | For non-student transfers under $100 the spec uses from < $4,000 and to < $2,000, but the code uses $1,000 for both, so all four rules collapse onto the wrong rates (e.g. $3,000 / $1,500 should be 0.2%). | Confirmed |
+| TF4 | TR-07–08, TR-15–16 (4) | `src/main/java/bank/utils/FeesCalculator.java` — `calculateTransferFee`, rate constants on lines 103, 105, 133 and 135 | These cases take the correct branch but still fail, so the constants themselves are wrong: lines 103, 105 and 133 are 10× the spec (e.g. 0.025 for 0.25%), and line 135 is 0.055 where the spec gives 0.25% (0.0025). | Confirmed |
 
 **Faults that the techniques did not reach.** Rule outcomes that the weak ECA does not combine (Section 1.4) were not
 tested. In `checkPinFormat`, the digit-9 rejection on line 35 cannot be seen yet because the length check on line 33
 rejects every 5-digit PIN first. It should show up as new failures for `SE-29`–`SE-42` once the length fault is fixed.
+Likewise, the missing daily-limit check (SF4) is hidden in the BVA max+ cases by the bill-check fault (SF2) and only
+shows in `SE-X7`; once SF2 is fixed, `SE-14`, `SE-21`, `SE-28`, `SE-35` and `SE-42` should fail on the amount step too.
+For the fee calculator, every fault above is also exposed by at least one in-domain case, so none of the fee faults
+depends on the out-of-domain assumptions in Section 1.1.
 
 ---
 
