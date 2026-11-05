@@ -73,8 +73,7 @@ fault assumption*, but these two pull in different directions: worst-case BVA is
 *multiple*-fault variant (every combination of boundary values), while the single fault assumption on its own gives
 robust BVA with one variable off nominal at a time (6n + 1 = 13 cases for n = 2). We followed the explicit request
 for worst case and generated all 49 cases; they include the 13 single-fault cases (every case where the PIN or the
-amount is at its nominal value). We applied the single fault assumption to how each case is *checked*, so that each
-check sees one fault at a time:
+amount is at its nominal value). Separately, we isolate the PIN and amount checks in different sessions so that a PIN-validation fault cannot prevent the amount check from running correctly. This isolation does not make the full 49-case suite a single-fault design:
 
 * The ATM asks for the PIN before the amount, so a case with an invalid PIN expects `InvalidPinFormatException`, and
   the session never reaches the amount.
